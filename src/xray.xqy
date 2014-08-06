@@ -3,8 +3,10 @@ xquery version "1.0-ml";
 module namespace xray = "http://github.com/robwhitby/xray";
 declare namespace test = "http://github.com/robwhitby/xray/test";
 import module namespace modules = "http://github.com/robwhitby/xray/modules" at "modules.xqy";
+import module namespace blanket = "http://github.com/robwhitby/blanket/parser" at 'parser.xqy';
 declare default element namespace "http://github.com/robwhitby/xray";
-
+declare variable $ACTUAL-DIR := "OnlineModules/xray/actual/";
+declare variable $EXPECTED-DIR := "OnlineModules/xray/expected/";
 declare variable $XRAY-VERSION := "2.0";
 
 declare function run-tests(
@@ -55,10 +57,9 @@ declare function run-test(
   $path as xs:string
 ) as element(test)
 {
+  let $start-time as xs:dayTimeDuration := xdmp:elapsed-time()
   let $ignore := has-test-annotation($fn, "ignore")
-  let $map := if ($ignore) then () else xray:apply($fn, $path)
-  let $test := map:get($map, "results")
-  let $time := map:get($map, "time")
+  let $test := if ($ignore) then () else xray:apply($fn, $path)
   return element test {
     attribute name { fn-local-name($fn) },
     attribute result {
@@ -67,11 +68,54 @@ declare function run-test(
       else if ($test//descendant-or-self::assert[@result="failed"]) then "failed"
       else "passed"
     },
-    attribute time { ($time, "PT0S")[1] },
+    attribute time { xdmp:elapsed-time() - $start-time },
     $test
   }
 };
 
+declare function get-function-name(
+    $error-frame as element(error:frame)
+) as xs:string
+{
+    (: e.g. "get-cid-from-id" from "test:get-cid-from-id()" :)
+    fn:replace($error-frame/error:operation, '^.*:(.*)\(.*$', '$1') 
+};
+
+declare function get-script-name(
+    $error-frame as element(error:frame)
+) as xs:string
+{
+    fn:tokenize($error-frame/error:uri,'[/\\]')[fn:last()]
+};
+
+declare function get-unpassed-filename(
+    $pattern as xs:string?
+) as xs:string
+{
+    try {
+        fn:error((), 'DEBUG-WHEREAMI', 'dummy error')
+    } catch ($ex) {
+        let $error-frame :=
+            if ($pattern) then $ex/error:stack/error:frame[fn:matches(error:uri, $pattern)][1]
+            (: matches the customized pattern, for future reuse :)
+            else $ex/error:stack/error:frame[fn:not(fn:matches(error:uri, 'xray.xqy$|assertions.xqy$'))][1]
+            (: the first function that doesn't come from xray.xqy or assertations.xqy is the function we want :)
+        return
+            get-script-name($error-frame) || '__' || get-function-name($error-frame)
+    }
+};
+
+declare function save-unpassed-results(
+    $pattern as xs:string?,
+    $actual as item()*,
+    $expected as item()*
+) as empty-sequence()
+{
+    let $filename := get-unpassed-filename($pattern)
+    return
+      (xdmp:save($ACTUAL-DIR || $filename || ".xml", document{$actual}),
+       xdmp:save($EXPECTED-DIR || $filename ||".xml", document{$expected}))
+};
 
 declare function assert-response(
   $assertion as xs:string,
@@ -87,7 +131,9 @@ declare function assert-response(
     element actual { $actual },
     element expected { $expected },
     element message { $message }
-  }
+  },
+  if ($passed) then () 
+  else save-unpassed-results((), $actual, $expected)
 };
 
 
@@ -111,16 +157,7 @@ declare private function apply(
     xdmp:eval('
       xquery version "1.0-ml";
       import module namespace test = "http://github.com/robwhitby/xray/test" at "' || $path || '";
-
-      let $start := xdmp:elapsed-time()
-      let $results := try { test:' || fn-local-name($fn) || '() } catch($err) { $err }
-      let $duration := xdmp:elapsed-time() - $start
-      let $map := map:map()
-      let $_ := (
-        map:put($map, "results", $results),
-        map:put($map, "time", $duration)
-      )
-      return $map
+      test:' || fn-local-name($fn) || '()
     ')
   }
   catch * { $err:additional }
@@ -158,19 +195,24 @@ declare function run-module-tests(
   $test-pattern as xs:string
 ) as element()*
 {
-  let $fns :=
-    for $f in xdmp:functions()
-    let $name := fn-local-name($f)
-    where 
-      has-test-annotation($f, ("setup", "teardown")) or 
-      has-test-annotation($f, ("case", "ignore")) and fn:matches($name, $test-pattern)
-    order by $name
-    return $f
+  let $fun-list := map:map()
   return (
-    map:get(apply($fns[has-test-annotation(., "setup")], $path), "results"),
-    run-test($fns[has-test-annotation(., "case") or has-test-annotation(., "ignore")], $path),
-    map:get(apply($fns[has-test-annotation(., "teardown")], $path), "results")
-  )
+    for $n at $pos in blanket:parse($path)/*
+    return map:put($fun-list,$n/@name, $pos)
+    ,
+    let $fns := 
+      for $f in xdmp:functions()[
+        has-test-annotation(., ("case", "ignore", "setup", "teardown")) and fn:matches(fn-local-name(.), $test-pattern)
+      ]
+      let $fn := fn-local-name($f)
+      order by map:get($fun-list, $fn)
+      return $f
+    return (
+      apply($fns[has-test-annotation(., "setup")], $path),
+      run-test(
+         $fns[has-test-annotation(., "case") or has-test-annotation(., "ignore")], $path),
+      apply($fns[has-test-annotation(., "teardown")], $path)
+    ))
 };
 
 declare function has-test-annotation(
@@ -199,7 +241,6 @@ declare private function transform(
 ) as document-node()
 {
   if ($format eq "text") then xdmp:set-response-content-type("text/plain") else (),
-  if ($format eq "json") then xdmp:set-response-content-type("application/json") else (),
   if ($format ne "xml")
   then
     let $params := map:map()

@@ -1,0 +1,1 @@
+"C:\Program Files (x86)\SourceGear\VaultPro Client\sgdm.exe" "C:\Program Files\MarkLogic\OnlineModules\xray\expected" "C:\Program Files\MarkLogic\OnlineModules\xray\actual"
