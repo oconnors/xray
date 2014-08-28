@@ -98,7 +98,7 @@ declare function get-unpassed-filename(
         let $error-frame :=
             if ($pattern) then $ex/error:stack/error:frame[fn:matches(error:uri, $pattern)][1]
             (: matches the customized pattern, for future reuse :)
-            else $ex/error:stack/error:frame[fn:not(fn:matches(error:uri, 'xray.xqy$|assertions.xqy$'))][1]
+            else $ex/error:stack/error:frame[fn:not(fn:matches(error:uri, 'xray.xqy$|assertions.xqy$')) and fn:matches(error:operation, '^test:')][1]
             (: the first function that doesn't come from xray.xqy or assertations.xqy is the function we want :)
         return
             get-script-name($error-frame) || '__' || get-function-name($error-frame)

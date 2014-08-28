@@ -3,3 +3,6 @@
 *.ipr
 *.iml
 *.iws
+
+expected/*
+actual/*
