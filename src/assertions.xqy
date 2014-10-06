@@ -139,5 +139,7 @@ declare private function deep-equal(
 {
   if ($a instance of cts:query)
   then fn:deep-equal(<q>{$a}</q>, <q>{$b}</q>)
+  else if ($a instance of map:map)
+  then fn:deep-equal(document{$a}, document{$b})
   else fn:deep-equal($a, $b)
 };
